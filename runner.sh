@@ -81,7 +81,7 @@ if $WITH_DB; then
 fi
 
 # ensure we're in the right directory
-cd -- "$( realpath -- "$( dirname -- "${BASH_SOURCE[0]}" )" ) " &> /dev/null
+cd -- "$(dirname -- "$(realpath -- "${BASH_SOURCE[0]}")")" &> /dev/null
 
 # build the image if it doesn't exist
 docker image inspect $PHP_IMAGE_NAME >/dev/null 2>&1
