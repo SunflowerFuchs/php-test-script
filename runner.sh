@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 
 NETWORK_NAME="php-test-net"
-PHP_VERSION=8.1
+PHP_VERSION="${PHP_VERSION:-8.3}"
 PHP_IMAGE_NAME="local/php-test"
 PHP_CONTAINER_NAME="php-test-${RANDOM}"
 PHP_CONTENT="<?php\n\n"
-EDITOR=""
+EDITOR="${EDITOR}"
+EDITOR_INTERNAL="${EDITOR_INTERNAL:-vi}"
 EDITOR_OFFSET=3
 WITH_DB=false
 DB_IMAGE_NAME="mysql:8"
@@ -25,6 +26,7 @@ while [ $# -gt 0 ]; do
       echo "-h, --help            show this help text"
       echo "--db                  also start an additional database instance (mysql)"
       echo "-f, --file            where on the host system to mount the edited file"
+      echo "-e, --editor          if not empty, use this editor on the host system instead of inside the container (defaults to \$EDITOR)"
       echo "-v, --version         which version of php to use (defaults to 8.1)"
       exit 0
       ;;
@@ -49,10 +51,6 @@ while [ $# -gt 0 ]; do
       shift 2
       ;;
     --editor|-e)
-      if [[ -z "$2" ]]; then
-        echo "No file passed with $1"
-        exit 1
-      fi
       EDITOR="$2"
       shift 2
       ;;
@@ -97,14 +95,14 @@ if [[ $? -ne 0 ]]; then
   docker network create $NETWORK_NAME
 fi
 
-# start the container with the editor
+# prepare the mounted file in case it isn't ready yet
 if [[ ! -e "$MOUNTED_FILE" ]] || [[ ! -s "$MOUNTED_FILE" ]]; then
   echo -e "$PHP_CONTENT" > "$MOUNTED_FILE"
 fi
-docker run --rm -tid --name=$PHP_CONTAINER_NAME --network=$NETWORK_NAME -v "$MOUNTED_FILE:/index.php" $PHP_IMAGE_NAME sh -c "micro -clipboard=internal index.php +${EDITOR_OFFSET}"
 
 # start the watch process that executes the script
-tmux split-window -d docker exec -ti $PHP_CONTAINER_NAME sh -c 'while inotifywait -qq -e close_write index.php; do sh -c "clear && php index.php"; done'
+docker run --rm -tid --name=$PHP_CONTAINER_NAME --network=$NETWORK_NAME --add-host 'host.docker.internal:host-gateway' -v "$MOUNTED_FILE:/index.php" $PHP_IMAGE_NAME sh -c 'while inotifywait -qq index.php; do sh -c "clear && php index.php"; done'
+tmux split-window -d docker attach $PHP_CONTAINER_NAME
 
 # start the db container
 if $WITH_DB; then
@@ -112,17 +110,18 @@ if $WITH_DB; then
   tmux split-window -d -h sh -c "docker exec -ti $PHP_CONTAINER_NAME wait-for-it -t 60 ${DB_CONTAINER_NAME}:3306 && docker exec -ti ${DB_CONTAINER_NAME} mysql --user=root --password=${DB_PASSWORD} ${DB_NAME}"
 fi
 
-# start the external editor if one was requested
+# start the editor; either the external editor (if one was requested), or the internal one
 if [[ ! -z "$EDITOR" ]]; then
-  $EDITOR "$MOUNTED_FILE"
+  $EDITOR "$MOUNTED_FILE" +${EDITOR_OFFSET}
+else
+  docker exec -ti $PHP_CONTAINER_NAME sh -c "${EDITOR_INTERNAL} index.php +${EDITOR_OFFSET}"
 fi
-
-# attach the container with the editor
-docker attach $PHP_CONTAINER_NAME
 
 if $WITH_DB; then
   docker kill $DB_CONTAINER_NAME >/dev/null 2>&1
 fi
+
+docker kill $PHP_CONTAINER_NAME >/dev/null 2>&1
 
 # and once the container closes, we can just clear all output to reset the terminal
 clear && tmux clear-history
